@@ -187,7 +187,7 @@ class NPM3DGenerator(keras.utils.Sequence):
         
         if(self.use_normals):
             write_ply(output_path,
-                      [self.clouds[index], self.normals[index], np.argmax(predictions, axis = -1)],
+                      [self.clouds[index], self.normals[index], np.argmax(predictions, axis = -1).astype(int)],
                       ['x', 'y', 'z', 'nx', 'ny', 'nz', 'class'])
         else:
             write_ply(output_path,
