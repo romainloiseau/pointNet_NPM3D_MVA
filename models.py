@@ -3,7 +3,7 @@ from keras.models import Model
 from keras.layers import Input, Conv1D, Lambda, MaxPooling1D, Flatten, Dense, Reshape, RepeatVector, Concatenate
 from keras import backend as K
 
-def build_point_net(input_shape = (2048, 3), output_shape = 10, mode = "classification"):
+def build_point_net(input_shape = (2048, 3), output_shape = 10, mode = "segmentation"):
     
     assert mode in ["classification", "segmentation"]
 
@@ -13,7 +13,7 @@ def build_point_net(input_shape = (2048, 3), output_shape = 10, mode = "classifi
         dot = K.batch_dot(input_tensors[0], input_tensors[1])
         return dot
     
-    transform3 = build_T_net((input_shape[0], 3), name = "T_net_3")(features)
+    transform3 = build_T_net((input_shape[0], input_shape[1]), name = "T_net_3")(features)
     transformed3 = Lambda(multiply, name = "transformed3")([features, transform3])
     
     conv10 = Conv1D(filters = 64, kernel_size = (1), padding = 'valid', strides = (1), activation = "relu", name = "conv10")(transformed3)
@@ -29,25 +29,25 @@ def build_point_net(input_shape = (2048, 3), output_shape = 10, mode = "classifi
     global_features = MaxPooling1D(pool_size = input_shape[0], strides = None, padding = "valid")(conv22)
     global_features = Flatten()(global_features)
     
-    dense0 = Dense(512, activation = "relu")(global_features)
-    dense1 = Dense(256, activation = "relu")(dense0)
-    dense2 = Dense(output_shape, activation = "softmax")(dense1)
-    
     if(mode == "classification"):
+        dense0 = Dense(512, activation = "relu")(global_features)
+        dense1 = Dense(256, activation = "relu")(dense0)
+        dense2 = Dense(output_shape, activation = "softmax")(dense1)
+    
         model = Model(inputs = features, outputs = dense2)
         return model
     
     elif(mode == "segmentation"):
         
-        input_segmentation = Concatenate()([transformed64, RepeatVector(input_shape[0])(global_features)])
+        input_segmentation = Concatenate()([transformed3, conv21, transformed64, RepeatVector(input_shape[0])(global_features)])
         
         conv30 = Conv1D(filters = 512, kernel_size = (1), padding = 'valid', strides = (1), activation = "relu", name = "conv30")(input_segmentation)
         conv31 = Conv1D(filters = 256, kernel_size = (1), padding = 'valid', strides = (1), activation = "relu", name = "conv31")(conv30)
         conv32 = Conv1D(filters = 128, kernel_size = (1), padding = 'valid', strides = (1), activation = "relu", name = "conv32")(conv31)
         conv33 = Conv1D(filters = 128, kernel_size = (1), padding = 'valid', strides = (1), activation = "relu", name = "conv33")(conv32)
-        conv34 = Conv1D(filters = m, kernel_size = (1), padding = 'valid', strides = (1), activation = "softmax", name = "conv34")(conv33)
+        conv34 = Conv1D(filters = output_shape, kernel_size = (1), padding = 'valid', strides = (1), activation = "softmax", name = "conv34")(conv33)
         
-        model = Model(inputs = features, outputs = dense2)
+        model = Model(inputs = features, outputs = conv34)
         return model
 
 from keras.layers import Layer
