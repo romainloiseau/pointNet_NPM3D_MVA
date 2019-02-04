@@ -7,6 +7,8 @@ This project is based on the following paper :
  ["PointNet: Deep Learning on Point Sets for 3D Classification and Segmentation".](https://arxiv.org/abs/1612.00593)  
 CoRR 2016**
 
-For now, we've implemented the following network on the [ModelNet40 dataset](http://modelnet.cs.princeton.edu/)
+For now, we've implemented the following network on the [ModelNet40](http://modelnet.cs.princeton.edu/) and the [NPM3D_Benchmark](http://npm3d.fr/benchmark-for-mva-master-course-on-3d-point-clouds) datasets.
 
 ![Network](/images/network.PNG)
+
+
