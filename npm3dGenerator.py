@@ -58,7 +58,7 @@ def preprocess_cloud(cloud, normal = None, eigen = None):
     cloud, normal = random_rotate_z(cloud, normal)
     if(normal is None):return cloud
     else:
-        if(eigen in None):return np.concatenate([cloud, normal], axis = -1)
+        if(eigen is None):return np.concatenate([cloud, normal], axis = -1)
         else:return np.concatenate([cloud, normal, eigen], axis = -1)
 
 def from_categorical(label):
@@ -89,8 +89,8 @@ class NPM3DGenerator(keras.utils.Sequence):
         
         self.prepare_NPM3D()
         
-    def get_label(self, data):
-        return = to_categorical(data[:, -1], num_classes = self.n_classes + 1)[:, 1:] if self.train else None
+    def get_label(self, label):
+        return to_categorical(label, num_classes = self.n_classes + 1)[:, 1:] 
         
     def load_point_cloud(self, input_dir):
         data = PlyData.read(input_dir)
@@ -107,7 +107,7 @@ class NPM3DGenerator(keras.utils.Sequence):
                 normal = data[:, 3:6]
             else:
                 normal, eigen = compute_normals(cloud, tree, self.normal_radius, input_dir)
-        label = self.get_label(data)
+        label = self.get_label(data[:, :-1]) if self.train else None
         return cloud, tree, normal, eigen, label
     
     def compute_class_weight(self):
