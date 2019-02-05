@@ -13,17 +13,36 @@ def get_cov(points):
     
     return points.transpose().dot(points) / points.shape[0]
 
-def compute_normals(cloud, tree, radius = .25):
-    neighborhoods = tree.query_radius(cloud, r=radius)
+def compute_normals(cloud, tree, radius = .25, path = None, save = True):
     
-    cov = [get_cov(cloud[neighborhood]) for neighborhood in neighborhoods]
-    
-    eigen_values, eigen_vectors = np.linalg.eigh(cov)
-    mini_eigen_values = np.argmin(eigen_values, axis = -1)
+    if(not path is None):
+        normal_path = path.split(".")[0] + "_normals.npy"
+        eigen_path = path.split(".")[0] + "_eigens.npy"
+        
+    if(path is None or not os.is_file(normal_path)):
+        neighborhoods = tree.query_radius(cloud, r = radius)
 
-    normals = np.array([vectors[:, mini] for vectors, mini in zip(eigen_vectors, mini_eigen_values)])
-    normals = (normals.transpose() / np.sum(normals**2, axis = -1)**.5).transpose()
-    return normals
+        cov = [get_cov(cloud[neighborhood]) for neighborhood in neighborhoods]
+
+        eigen_values, eigen_vectors = np.linalg.eigh(cov)
+        mini_eigen_values = np.argmin(eigen_values, axis = -1)
+
+        normals = np.array([vectors[:, mini] for vectors, mini in zip(eigen_vectors, mini_eigen_values)])
+        normals = (normals.transpose() / np.sum(normals**2, axis = -1)**.5).transpose()
+
+        sorted_eigenvalues = np.sort(eigen_values)
+        sorted_eigenvalues = np.maximum(sorted_eigenvalues, 10**(-6))
+        sorted_eigenvalues = (sorted_eigenvalues.transpose() / sorted_eigenvalues[:, -1]).transpose()[:, :-1]
+        
+        if(save and not path is None):
+            np.save(normal_path, normals)
+            np.save(eigen_path, sorted_eigenvalues)
+    
+    else:
+        normals = np.load(normal_path)
+        sorted_eigenvalues = np.load(eigen_path)
+        
+    return normals, sorted_eigenvalues
 
 def random_rotate_z(cloud, normal = None):
     rotation = 2 * np.pi * np.random.random()
@@ -34,18 +53,20 @@ def random_rotate_z(cloud, normal = None):
     if(normal is None):return cloud.dot(rotation_matrix), None
     else:return cloud.dot(rotation_matrix), normal.dot(rotation_matrix)
 
-def preprocess_cloud(cloud, normal = None):
+def preprocess_cloud(cloud, normal = None, eigen = None):
     cloud -= np.mean(cloud, axis = 0)
     cloud, normal = random_rotate_z(cloud, normal)
     if(normal is None):return cloud
-    else:return np.concatenate([cloud, normal], axis = -1)
+    else:
+        if(eigen in None):return np.concatenate([cloud, normal], axis = -1)
+        else:return np.concatenate([cloud, normal, eigen], axis = -1)
 
 def from_categorical(label):
     return label.dot(1 + np.arange(label.shape[-1]))
 
 class NPM3DGenerator(keras.utils.Sequence):
     'Generates data for Keras'
-    def __init__(self, n_points = 4096, batch_size = 8, input_dir = "../Benchmark_MVA/training", train = True, paths_to_keep = None, use_normals = True, compute_normals = False, normal_radius = .25):
+    def __init__(self, n_points = 4096, batch_size = 8, input_dir = "../Benchmark_MVA/training", train = True, paths_to_keep = None, use_normals = True, compute_normals = True, normal_radius = .25):
         'Initialization'
         
         self.class_dict = {0 : "unclassified", 1 : "ground", 2 : "buildings", 3 : "poles", 4 : "pedestrians", 5 : "cars", 6 : "vegetation"}
@@ -61,8 +82,10 @@ class NPM3DGenerator(keras.utils.Sequence):
         self.use_normals = use_normals
         self.compute_normals = compute_normals
         self.use_precomputed_normals = use_normals and not compute_normals
+        
         self.n_channels = 3
         if(self.use_normals):self.n_channels += 3
+        if(self.compute_normals):self.n_channels += 2
         
         self.prepare_NPM3D()
         
@@ -75,13 +98,14 @@ class NPM3DGenerator(keras.utils.Sequence):
         cloud = data[:, :3]
         tree = KDTree(cloud)
         normal = None
+        eigen = None
         if(self.use_normals):
             if(self.use_precomputed_normals):
                 normal = data[:, 3:6]
             else:
-                normal = compute_normals(cloud, tree, self.normal_radius)
+                normal, eigen = compute_normals(cloud, tree, self.normal_radius, input_dir)
         label = to_categorical(data[:, -1], num_classes = self.n_classes + 1)[:, 1:] if self.train else None
-        return cloud, tree, normal, label
+        return cloud, tree, normal, eigen, label
     
     def compute_class_weight(self):
         sum_labels = np.mean(np.concatenate(self.labels), axis = 0)
@@ -98,16 +122,18 @@ class NPM3DGenerator(keras.utils.Sequence):
         self.clouds = []
         self.trees = []
         if(self.use_normals):self.normals = []
+        if(self.compute_normals):self.eigens = []
         if(self.train):self.labels = []
         
         for path in tqdm_notebook(self.paths):
-            cloud, tree, normal, label = self.load_point_cloud(os.path.join(self.input_dir, path))
+            cloud, tree, normal, eigen, label = self.load_point_cloud(os.path.join(self.input_dir, path))
             self.clouds.append(cloud)
             self.trees.append(tree)
             if(self.use_normals):self.normals.append(normal)
+            if(self.compute_normals):self.eigens.append(eigen)
             if(self.train):self.labels.append(label)
         
-        self.n_points_clouds = [len(c) for c in self.clouds]
+        self.n_points_clouds = np.array([len(c) for c in self.clouds])
         
         self.n_points_total = np.sum(self.n_points_clouds)
         self.n_clouds = len(self.clouds)
@@ -121,28 +147,29 @@ class NPM3DGenerator(keras.utils.Sequence):
     def __getitem__(self, index):
         'Generate one batch of data'
         # Generate indexes of the batch
-        indexes = np.random.choice(self.n_clouds, self.batch_size)
+        indexes = np.random.choice(self.n_clouds, self.batch_size, p = self.n_points_clouds / self.n_points_total)
 
         # Generate data
         X, y = self.__data_generation(indexes)
 
         return X, y
     
-    def sample_point_cloud(self, original_point_cloud = 0, center_point = None):
+    def sample_point_cloud(self, index = 0, center_point = None):
         
-        if(center_point is None):center_point = np.random.randint(self.n_points_clouds[original_point_cloud])
-        dist, ind = self.trees[original_point_cloud].query([self.clouds[original_point_cloud][center_point]], k = self.n_points)
+        if(center_point is None):center_point = np.random.randint(self.n_points_clouds[index])
+        dist, ind = self.trees[index].query([self.clouds[index][center_point]], k = self.n_points)
+        dist, ind = dist[0], ind[0]
         
         if(self.use_normals):
-            cloud = preprocess_cloud(self.clouds[original_point_cloud][ind[0]], self.normals[original_point_cloud][ind[0]])
-        else:
-            cloud = preprocess_cloud(self.clouds[original_point_cloud][ind[0]])
+            if(self.compute_normals):cloud = preprocess_cloud(self.clouds[index][ind], self.normals[index][ind])
+            else:cloud = preprocess_cloud(self.clouds[index][ind], self.normals[index][ind], self.eigens[index][ind])
+        else:cloud = preprocess_cloud(self.clouds[index][ind])
         
         if(self.train):
-            label = self.labels[original_point_cloud][ind[0]]
+            label = self.labels[index][ind]
             return cloud, label
         else:
-            return cloud, ind[0], dist[0]      
+            return cloud, ind, dist
             
     def __data_generation(self, indexes):
         'Generates data containing batch_size samples'
