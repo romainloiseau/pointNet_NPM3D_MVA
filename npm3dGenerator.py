@@ -66,7 +66,7 @@ def from_categorical(label):
 
 class NPM3DGenerator(keras.utils.Sequence):
     'Generates data for Keras'
-    def __init__(self, n_points = 4096, batch_size = 8, input_dir = "../Benchmark_MVA/training", train = True, paths_to_keep = None, use_normals = True, compute_normals = True, normal_radius = .25):
+    def __init__(self, n_points = 4096, batch_size = 8, input_dir = "../Benchmark_MVA/training", train = True, paths_to_keep = None, use_normals = False, compute_normals = True, normal_radius = .25):
         'Initialization'
         
         self.class_dict = {0 : "unclassified", 1 : "ground", 2 : "buildings", 3 : "poles", 4 : "pedestrians", 5 : "cars", 6 : "vegetation"}
@@ -80,7 +80,7 @@ class NPM3DGenerator(keras.utils.Sequence):
         self.train = train
         self.normal_radius = normal_radius
         self.use_normals = use_normals
-        self.compute_normals = compute_normals
+        self.compute_normals = use_normals and compute_normals
         self.use_precomputed_normals = use_normals and not compute_normals
         
         self.n_channels = 3
