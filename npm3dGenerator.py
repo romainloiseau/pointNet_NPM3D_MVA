@@ -89,6 +89,9 @@ class NPM3DGenerator(keras.utils.Sequence):
         
         self.prepare_NPM3D()
         
+    def get_label(self, data):
+        return = to_categorical(data[:, -1], num_classes = self.n_classes + 1)[:, 1:] if self.train else None
+        
     def load_point_cloud(self, input_dir):
         data = PlyData.read(input_dir)
         columns = ["x", "y", "z"]
@@ -104,7 +107,7 @@ class NPM3DGenerator(keras.utils.Sequence):
                 normal = data[:, 3:6]
             else:
                 normal, eigen = compute_normals(cloud, tree, self.normal_radius, input_dir)
-        label = to_categorical(data[:, -1], num_classes = self.n_classes + 1)[:, 1:] if self.train else None
+        label = self.get_label(data)
         return cloud, tree, normal, eigen, label
     
     def compute_class_weight(self):
