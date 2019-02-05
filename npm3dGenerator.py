@@ -81,7 +81,7 @@ class NPM3DGenerator(keras.utils.Sequence):
         self.normal_radius = normal_radius
         self.use_normals = use_normals
         self.compute_normals = use_normals and compute_normals
-        self.use_precomputed_normals = use_normals and not compute_normals
+        self.use_CCcomputed_normals = use_normals and not compute_normals
         
         self.n_channels = 3
         if(self.use_normals):self.n_channels += 3
@@ -95,7 +95,7 @@ class NPM3DGenerator(keras.utils.Sequence):
     def load_point_cloud(self, input_dir):
         data = PlyData.read(input_dir)
         columns = ["x", "y", "z"]
-        if(self.use_precomputed_normals):columns += ["nx", "ny", "nz", "scalar_class"]
+        if(self.use_CCcomputed_normals):columns += ["nx", "ny", "nz", "scalar_class"]
         else:columns += ["class"]
         data = np.array([data.elements[0].data[i] for i in columns[:len(data.elements[0].properties)]]).transpose()
         cloud = data[:, :3]
@@ -103,11 +103,11 @@ class NPM3DGenerator(keras.utils.Sequence):
         normal = None
         eigen = None
         if(self.use_normals):
-            if(self.use_precomputed_normals):
+            if(self.use_CCcomputed_normals):
                 normal = data[:, 3:6]
             else:
                 normal, eigen = compute_normals(cloud, tree, self.normal_radius, input_dir)
-        label = self.get_label(data[:, :-1]) if self.train else None
+        label = self.get_label(data[:, -1]) if self.train else None
         return cloud, tree, normal, eigen, label
     
     def compute_class_weight(self):
@@ -117,11 +117,11 @@ class NPM3DGenerator(keras.utils.Sequence):
     
     def prepare_NPM3D(self):
         self.paths = os.listdir(self.input_dir)
-        if(self.use_precomputed_normals):self.paths = [path for path in self.paths if path.split(".")[0][-8:] == "_normals"]
+        self.paths = [path for path in self.paths if path.split(".")[-1] == "ply"]
+        if(self.use_CCcomputed_normals):self.paths = [path for path in self.paths if path.split(".")[0][-8:] == "_normals"]
         else:self.paths = [path for path in self.paths if path.split(".")[0][-8:] != "_normals"]
-        if(not self.paths_to_keep is None):
-            self.paths = [path for i, path in enumerate(self.paths) if i in self.paths_to_keep]
-        
+        if(not self.paths_to_keep is None):self.paths = [path for i, path in enumerate(self.paths) if i in self.paths_to_keep]
+            
         self.clouds = []
         self.trees = []
         if(self.use_normals):self.normals = []
@@ -225,3 +225,31 @@ class NPM3DGenerator(keras.utils.Sequence):
                       ['x', 'y', 'z', 'class'])
         
         return predictions
+    
+class NPM3DGenerator_full(NPM3DGenerator):
+    'Generates data for Keras'
+    def __init__(self, n_points = 4096, batch_size = 8, input_dir = "../Benchmark/training_10_classes", train = True, paths_to_keep = None, use_normals = False, compute_normals = True, normal_radius = .25):
+        'Initialization'
+        
+        self.class_dict = {0 : "unclassified", 1 : "ground", 2 : "buildings", 3 : "poles", 4 : "pedestrians", 5 : "cars", 6 : "vegetation"}
+        self.n_classes = len(self.class_dict) - 1
+        
+        self.input_dir = input_dir
+        self.paths_to_keep = paths_to_keep
+        
+        self.batch_size = batch_size
+        self.n_points = n_points
+        self.train = train
+        self.normal_radius = normal_radius
+        self.use_normals = use_normals
+        self.compute_normals = use_normals and compute_normals
+        self.use_CCcomputed_normals = use_normals and not compute_normals
+        
+        self.n_channels = 3
+        if(self.use_normals):self.n_channels += 3
+        if(self.compute_normals):self.n_channels += 2
+        
+        self.prepare_NPM3D()
+        
+    def get_label(self, label):
+        return to_categorical(label, num_classes = self.n_classes + 1)[:, 1:] 
