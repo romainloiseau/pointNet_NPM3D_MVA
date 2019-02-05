@@ -58,7 +58,7 @@ def preprocess_cloud(cloud, normal = None, eigen = None):
     cloud, normal = random_rotate_z(cloud, normal)
     if(normal is None):return cloud
     else:
-        if(eigen in None):return np.concatenate([cloud, normal], axis = -1)
+        if(eigen is None):return np.concatenate([cloud, normal], axis = -1)
         else:return np.concatenate([cloud, normal, eigen], axis = -1)
 
 def from_categorical(label):
