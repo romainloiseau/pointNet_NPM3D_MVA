@@ -10,35 +10,52 @@ import keras
 
 def get_cov(points):
     points -= np.mean(points, axis = 0)
-    
     return points.transpose().dot(points) / points.shape[0]
 
-def compute_normals(cloud, tree, radius = .25, path = None, save = True):
+def refine_normals(normals):
+    return np.abs(normals)
+    
+def compute_normals(cloud, tree, radius = .75, path = None, save = True):
     
     if(not path is None):
-        normal_path = path.split(".")[0] + "_normals.npy"
-        eigen_path = path.split(".")[0] + "_eigens.npy"
+        print("not path is None", path)
+        normal_path = path[:-4] + "_normals.npy"
+        print(normal_path)
+        eigen_path = path[:-4] + "_eigens.npy"
         
-    if(path is None or not os.is_file(normal_path)):
-        neighborhoods = tree.query_radius(cloud, r = radius)
-
-        cov = [get_cov(cloud[neighborhood]) for neighborhood in neighborhoods]
-
+    if((path is None) or (not os.path.isfile(normal_path))):
+        print("path is None or not os.path.isfile(normal_path))")
+        max_points_in_cloud = 2500000
+        if(len(cloud) < max_points_in_cloud):
+            try:
+                neighborhoods = tree.query_radius(cloud, r = radius)
+                cov = np.array([get_cov(cloud[neighborhood]) for neighborhood in neighborhoods])
+            except:
+                print("EXCEPT")
+                cov = np.array([get_cov(cloud[tree.query_radius([point], r = radius)[0]]) for point in tqdm_notebook(cloud)])
+        else:
+            n_splits = 4 * (int(len(cloud) / max_points_in_cloud) + 1)
+            print("SPLITTING {}".format(n_splits))
+            cov = np.concatenate([np.array([get_cov(cloud[neighborhood]) for neighborhood in tree.query_radius(cloud[int(i * len(cloud) / n_splits): int((i + 1) * len(cloud) / n_splits)], r = radius)]) for i in tqdm_notebook(range(n_splits))], axis = 0)
+        
+        print(len(cov), len(cloud))
         eigen_values, eigen_vectors = np.linalg.eigh(cov)
         mini_eigen_values = np.argmin(eigen_values, axis = -1)
 
         normals = np.array([vectors[:, mini] for vectors, mini in zip(eigen_vectors, mini_eigen_values)])
-        normals = (normals.transpose() / np.sum(normals**2, axis = -1)**.5).transpose()
+        normals = refine_normals((normals.transpose() / np.sum(normals**2, axis = -1)**.5).transpose())
 
         sorted_eigenvalues = np.sort(eigen_values)
         sorted_eigenvalues = np.maximum(sorted_eigenvalues, 10**(-6))
         sorted_eigenvalues = (sorted_eigenvalues.transpose() / sorted_eigenvalues[:, -1]).transpose()[:, :-1]
         
         if(save and not path is None):
+            print("save and not path is None")
             np.save(normal_path, normals)
             np.save(eigen_path, sorted_eigenvalues)
     
     else:
+        print("else", normal_path)
         normals = np.load(normal_path)
         sorted_eigenvalues = np.load(eigen_path)
         
@@ -66,7 +83,7 @@ def from_categorical(label):
 
 class NPM3DGenerator(keras.utils.Sequence):
     'Generates data for Keras'
-    def __init__(self, n_points = 4096, batch_size = 8, input_dir = "../Benchmark_MVA/training", train = True, paths_to_keep = None, use_normals = False, compute_normals = True, normal_radius = .25):
+    def __init__(self, n_points = 4096, batch_size = 8, input_dir = "../Benchmark_MVA/training", train = True, paths_to_keep = None, use_normals = True, compute_normals = True, normal_radius = .75):
         'Initialization'
         
         self.class_dict = {0 : "unclassified", 1 : "ground", 2 : "buildings", 3 : "poles", 4 : "pedestrians", 5 : "cars", 6 : "vegetation"}
@@ -164,8 +181,8 @@ class NPM3DGenerator(keras.utils.Sequence):
         dist, ind = dist[0], ind[0]
         
         if(self.use_normals):
-            if(self.compute_normals):cloud = preprocess_cloud(self.clouds[index][ind], self.normals[index][ind])
-            else:cloud = preprocess_cloud(self.clouds[index][ind], self.normals[index][ind], self.eigens[index][ind])
+            if(self.compute_normals):cloud = preprocess_cloud(self.clouds[index][ind], self.normals[index][ind], self.eigens[index][ind])
+            else:cloud = preprocess_cloud(self.clouds[index][ind], self.normals[index][ind])
         else:cloud = preprocess_cloud(self.clouds[index][ind])
         
         if(self.train):
