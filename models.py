@@ -2,6 +2,7 @@ import numpy as np
 from keras.models import Model
 from keras.layers import Input, Conv1D, Lambda, MaxPooling1D, Flatten, Dense, Reshape, RepeatVector, Concatenate
 from keras import backend as K
+from tensorflow.python.keras.models import model_from_json
 
 def build_point_net(input_shape = (2048, 3), output_shape = 10, mode = "segmentation"):
     
@@ -94,3 +95,23 @@ def build_T_net(input_shape = (2048, 3), name = ""):
     else:model = Model(inputs = features, outputs = transform)
     
     return model
+
+def save_model(model, output_path):
+    model_json = model.to_json()
+    with open(output_path + ".json", "w") as json_file:
+        json_file.write(model_json)
+    # serialize weights to HDF5
+    model.save_weights(output_path + ".h5")
+    print("Saved model to disk")
+    
+def load_model(input_path):
+    json_file = open(input_path + '.json', 'r')
+    loaded_model_json = json_file.read()
+    json_file.close()
+    #loaded_model = model_from_json(loaded_model_json, {'TransformLayer': TransformLayer})
+    params = input_path.split("_")
+    loaded_model = build_point_net(input_shape = (int(params[-3]), int(params[-2])), output_shape = int(params[-1]))
+    loaded_model.load_weights(input_path + '.h5')
+    print("Loaded model from disk")
+    
+    return loaded_model

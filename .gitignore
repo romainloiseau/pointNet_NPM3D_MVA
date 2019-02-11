@@ -1,5 +1,6 @@
 *.h5
 *.json
+*.txt
 *.ply
 
 # Byte-compiled / optimized / DLL files

@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+import time
 from tqdm import tqdm_notebook
 from keras.utils import to_categorical
 from sklearn.neighbors import KDTree
@@ -15,8 +16,8 @@ def get_cov(points):
 def refine_normals(normals):
     return np.abs(normals)
     
-def compute_normals(cloud, tree, radius = .75, path = None, save = True):
-    
+def compute_normals(tree, radius = .75, path = None, save = True):
+    npoints = len(np.array(tree.data))
     if(not path is None):
         print("not path is None", path)
         normal_path = path[:-4] + "_normals.npy"
@@ -28,15 +29,15 @@ def compute_normals(cloud, tree, radius = .75, path = None, save = True):
         max_points_in_cloud = 2000000
         if(len(cloud) < max_points_in_cloud):
             try:
-                neighborhoods = tree.query_radius(cloud, r = radius)
-                cov = np.array([get_cov(cloud[neighborhood]) for neighborhood in neighborhoods])
+                neighborhoods = tree.query_radius(np.array(tree.data), r = radius)
+                cov = np.array([get_cov(np.array(tree.data)[neighborhood]) for neighborhood in neighborhoods])
             except:
                 print("EXCEPT")
-                cov = np.array([get_cov(cloud[tree.query_radius([point], r = radius)[0]]) for point in tqdm_notebook(cloud)])
+                cov = np.array([get_cov(np.array(tree.data)[tree.query_radius([point], r = radius)[0]]) for point in tqdm_notebook(np.array(tree.data))])
         else:
-            n_splits = int(10 * len(cloud) / max_points_in_cloud) + 1
+            n_splits = int(10 * npoints / max_points_in_cloud) + 1
             print("SPLITTING {}".format(n_splits))
-            cov = np.concatenate([np.array([get_cov(cloud[neighborhood]) for neighborhood in tree.query_radius(cloud[int(i * len(cloud) / n_splits): int((i + 1) * len(cloud) / n_splits)], r = radius)]) for i in tqdm_notebook(range(n_splits))], axis = 0)
+            cov = np.concatenate([np.array([get_cov(np.array(tree.data)[neighborhood]) for neighborhood in tree.query_radius(np.array(tree.data)[int(i * npoints / n_splits): int((i + 1) * npoints / n_splits)], r = radius)]) for i in tqdm_notebook(range(n_splits))], axis = 0)
         
         print(len(cov), len(cloud))
         eigen_values, eigen_vectors = np.linalg.eigh(cov)
@@ -115,17 +116,16 @@ class NPM3DGenerator(keras.utils.Sequence):
         if(self.use_CCcomputed_normals):columns += ["nx", "ny", "nz", "scalar_class"]
         else:columns += ["class"]
         data = np.array([data.elements[0].data[i] for i in columns[:len(data.elements[0].properties)]]).transpose()
-        cloud = data[:, :3]
-        tree = KDTree(cloud)
+        tree = KDTree(data[:, :3])
         normal = None
         eigen = None
         if(self.use_normals):
             if(self.use_CCcomputed_normals):
                 normal = data[:, 3:6]
             else:
-                normal, eigen = compute_normals(cloud, tree, self.normal_radius, input_dir)
+                normal, eigen = compute_normals(tree, self.normal_radius, input_dir)
         label = self.get_label(data[:, -1]) if self.train else None
-        return cloud, tree, normal, eigen, label
+        return tree, normal, eigen, label
     
     def compute_class_weight(self):
         sum_labels = np.mean(np.concatenate(self.labels), axis = 0)
@@ -138,25 +138,23 @@ class NPM3DGenerator(keras.utils.Sequence):
         if(self.use_CCcomputed_normals):self.paths = [path for path in self.paths if path.split(".")[0][-8:] == "_normals"]
         else:self.paths = [path for path in self.paths if path.split(".")[0][-8:] != "_normals"]
         if(not self.paths_to_keep is None):self.paths = [path for i, path in enumerate(self.paths) if i in self.paths_to_keep]
-            
-        self.clouds = []
+          
         self.trees = []
         if(self.use_normals):self.normals = []
         if(self.compute_normals):self.eigens = []
         if(self.train):self.labels = []
         
         for path in tqdm_notebook(self.paths):
-            cloud, tree, normal, eigen, label = self.load_point_cloud(os.path.join(self.input_dir, path))
-            self.clouds.append(cloud)
+            tree, normal, eigen, label = self.load_point_cloud(os.path.join(self.input_dir, path))
             self.trees.append(tree)
             if(self.use_normals):self.normals.append(normal)
             if(self.compute_normals):self.eigens.append(eigen)
             if(self.train):self.labels.append(label)
         
-        self.n_points_clouds = np.array([len(c) for c in self.clouds])
+        self.n_points_clouds = np.array([len(tree.data) for tree in self.trees])
         
         self.n_points_total = np.sum(self.n_points_clouds)
-        self.n_clouds = len(self.clouds)
+        self.n_clouds = len(self.trees)
         
         if(self.train):self.compute_class_weight()
     
@@ -174,16 +172,15 @@ class NPM3DGenerator(keras.utils.Sequence):
 
         return X, y
     
-    def sample_point_cloud(self, index = 0, center_point = None):
-        
-        if(center_point is None):center_point = np.random.randint(self.n_points_clouds[index])
-        dist, ind = self.trees[index].query([self.clouds[index][center_point]], k = self.n_points)
+    def sample_point_cloud(self, index = 0, center_points_index = None):
+        if(center_points_index is None):center_points_index = np.random.randint(self.n_points_clouds[index])
+        dist, ind = self.trees[index].query([np.array(self.trees[index].data)[center_points_index]], k = self.n_points)
         dist, ind = dist[0], ind[0]
         
         if(self.use_normals):
-            if(self.compute_normals):cloud = preprocess_cloud(self.clouds[index][ind], self.normals[index][ind], self.eigens[index][ind])
-            else:cloud = preprocess_cloud(self.clouds[index][ind], self.normals[index][ind])
-        else:cloud = preprocess_cloud(self.clouds[index][ind])
+            if(self.compute_normals):cloud = preprocess_cloud(np.array(self.trees[index].data)[ind], self.normals[index][ind], self.eigens[index][ind])
+            else:cloud = preprocess_cloud(np.array(self.trees[index].data)[ind], self.normals[index][ind])
+        else:cloud = preprocess_cloud(np.array(self.trees[index].data)[ind])
         
         if(self.train):
             label = self.labels[index][ind]
@@ -213,8 +210,8 @@ class NPM3DGenerator(keras.utils.Sequence):
         
         pbar, pbar_value, pbar_update = tqdm_notebook(total=100), 0, 0
         while np.min(weights) < epsilon_weights:
-            center_points = all_indexes[weights < epsilon_weights]
-            cloud, ind, dist = self.sample_point_cloud(index = index, center_point = center_points[np.random.randint(len(center_points))])
+            center_points_indexes = all_indexes[weights < epsilon_weights]
+            cloud, ind, dist = self.sample_point_cloud(index = index, center_points_index = center_points_indexes[np.random.randint(len(center_points_index))])
             weight = 1. / np.clip(dist, .1 * np.max(dist), 10.)
             
             prediction = model.predict(np.expand_dims(cloud, axis = 0))[0]
