@@ -27,7 +27,7 @@ def compute_normals(tree, radius = .75, path = None, save = True):
     if((path is None) or (not os.path.isfile(normal_path))):
         print("path is None or not os.path.isfile(normal_path))")
         max_points_in_cloud = 2000000
-        if(len(cloud) < max_points_in_cloud):
+        if(npoints < max_points_in_cloud):
             try:
                 neighborhoods = tree.query_radius(np.array(tree.data), r = radius)
                 cov = np.array([get_cov(np.array(tree.data)[neighborhood]) for neighborhood in neighborhoods])
@@ -39,7 +39,7 @@ def compute_normals(tree, radius = .75, path = None, save = True):
             print("SPLITTING {}".format(n_splits))
             cov = np.concatenate([np.array([get_cov(np.array(tree.data)[neighborhood]) for neighborhood in tree.query_radius(np.array(tree.data)[int(i * npoints / n_splits): int((i + 1) * npoints / n_splits)], r = radius)]) for i in tqdm_notebook(range(n_splits))], axis = 0)
         
-        print(len(cov), len(cloud))
+        print(len(cov), npoints)
         eigen_values, eigen_vectors = np.linalg.eigh(cov)
         mini_eigen_values = np.argmin(eigen_values, axis = -1)
 
@@ -69,7 +69,7 @@ def random_rotate_z(cloud, normal = None):
                                 [0, 0, 1.]])
     
     if(normal is None):return cloud.dot(rotation_matrix), None
-    else:return cloud.dot(rotation_matrix), normal.dot(rotation_matrix)
+    else:return cloud.dot(rotation_matrix), refine_normals(normal.dot(rotation_matrix))
 
 def preprocess_cloud(cloud, normal = None, eigen = None):
     cloud -= np.mean(cloud, axis = 0)
@@ -84,7 +84,7 @@ def from_categorical(label):
 
 class NPM3DGenerator(keras.utils.Sequence):
     'Generates data for Keras'
-    def __init__(self, n_points = 4096, batch_size = 8, input_dir = "../Benchmark_MVA/training", train = True, paths_to_keep = None, use_normals = True, compute_normals = True, normal_radius = .75):
+    def __init__(self, n_points = 4096, batch_size = 8, input_dir = "../Benchmark_MVA/training", train = True, paths_to_keep = None, use_normals = True, compute_normals = True, normal_radius = .75, sample_uniformly_from_classes = False):
         'Initialization'
         
         self.class_dict = {0 : "unclassified", 1 : "ground", 2 : "buildings", 3 : "poles", 4 : "pedestrians", 5 : "cars", 6 : "vegetation"}
@@ -96,6 +96,7 @@ class NPM3DGenerator(keras.utils.Sequence):
         self.batch_size = batch_size
         self.n_points = n_points
         self.train = train
+        self.sample_uniformly_from_classes = sample_uniformly_from_classes
         self.normal_radius = normal_radius
         self.use_normals = use_normals
         self.compute_normals = use_normals and compute_normals
@@ -106,6 +107,22 @@ class NPM3DGenerator(keras.utils.Sequence):
         if(self.compute_normals):self.n_channels += 2
         
         self.prepare_NPM3D()
+    
+    def __str__(self):
+        output = ""
+        output += "NPM3DGenerator config\n"
+        output += "n_classes         : {}\n".format(self.n_classes)
+        output += "batch_size        : {}\n".format(self.batch_size)
+        output += "n_points          : {}\n".format(self.n_points)
+        output += "n_channels        : {}\n".format(self.n_channels)
+        output += "train             : {}\n".format(self.train)
+        if(self.use_normals):
+            output += "use_normals       : {}\n".format(self.use_normals)
+            output += "normal_radius     : {}\n".format(self.normal_radius)
+            output += "compute_normals   : {}\n".format(self.compute_normals)
+        if(self.train):
+            output += "class_weight      : {}".format(np.array2string(self.class_weight, formatter={'float_kind':lambda x: "%.2f" % x}))
+        return output
         
     def get_label(self, label):
         return to_categorical(label, num_classes = self.n_classes + 1)[:, 1:] 
@@ -156,7 +173,10 @@ class NPM3DGenerator(keras.utils.Sequence):
         self.n_points_total = np.sum(self.n_points_clouds)
         self.n_clouds = len(self.trees)
         
-        if(self.train):self.compute_class_weight()
+        if(self.train):
+            self.compute_class_weight()
+            if(self.sample_uniformly_from_classes):
+                self.labels_as_int = [label.dot(np.arange(self.n_classes)) for label in self.labels]
     
     def __len__(self):
         'Denotes the number of batches per epoch'
@@ -173,7 +193,18 @@ class NPM3DGenerator(keras.utils.Sequence):
         return X, y
     
     def sample_point_cloud(self, index = 0, center_points_index = None):
-        if(center_points_index is None):center_points_index = np.random.randint(self.n_points_clouds[index])
+        if(center_points_index is None):
+            if(self.train and self.sample_uniformly_from_classes):
+                chosen_label = np.random.randint(self.n_classes)
+                chosen_indexes = np.where(self.labels_as_int[index] == chosen_label)[0]
+                if(len(chosen_indexes) > 0):
+                    center_points_index = chosen_indexes[np.random.randint(len(chosen_indexes))]
+                    #print("pass", index, chosen_label, chosen_indexes.shape, self.labels[index].shape, center_points_index)
+                else:
+                    center_points_index = np.random.randint(self.n_points_clouds[index])
+                    #print("pass", index, np.arange(self.n_classes).dot(chosen_label), chosen_indexes.shape)
+            else:
+                center_points_index = np.random.randint(self.n_points_clouds[index])
         dist, ind = self.trees[index].query([np.array(self.trees[index].data)[center_points_index]], k = self.n_points)
         dist, ind = dist[0], ind[0]
         
@@ -203,7 +234,7 @@ class NPM3DGenerator(keras.utils.Sequence):
 
         return clouds, labels
     
-    def predict_point_cloud(self, model, index = 0, epsilon_weights = .1, output_path = None):
+    def predict_point_cloud(self, model, index = 0, epsilon_weights = .2, output_path = None):
         all_indexes = np.arange(self.n_points_clouds[index])
         predictions = np.zeros((self.n_points_clouds[index], self.n_classes))
         weights = np.zeros(self.n_points_clouds[index])
@@ -211,7 +242,7 @@ class NPM3DGenerator(keras.utils.Sequence):
         pbar, pbar_value, pbar_update = tqdm_notebook(total=100), 0, 0
         while np.min(weights) < epsilon_weights:
             center_points_indexes = all_indexes[weights < epsilon_weights]
-            cloud, ind, dist = self.sample_point_cloud(index = index, center_points_index = center_points_indexes[np.random.randint(len(center_points_index))])
+            cloud, ind, dist = self.sample_point_cloud(index = index, center_points_index = center_points_indexes[np.random.randint(len(center_points_indexes))])
             weight = 1. / np.clip(dist, .1 * np.max(dist), 10.)
             
             prediction = model.predict(np.expand_dims(cloud, axis = 0))[0]
@@ -225,20 +256,21 @@ class NPM3DGenerator(keras.utils.Sequence):
                 pbar.update()
         pbar.close()
         
-        predictions = (predictions.transpose() * weights).transpose()
+        predictions = (predictions.transpose() / weights).transpose()
+        predictions_int = (np.argmax(predictions, axis = -1) + 1).astype(int)
         
         if(output_path is None):output_path = self.paths[index].split(".")[0] + "_prediction.ply"
         
         if(self.use_normals):
             write_ply(output_path,
-                      [self.clouds[index], self.normals[index], np.argmax(predictions, axis = -1).astype(int)],
+                      [np.array(self.trees[index].data), self.normals[index], predictions_int],
                       ['x', 'y', 'z', 'nx', 'ny', 'nz', 'class'])
         else:
             write_ply(output_path,
-                      [self.clouds[index], np.argmax(predictions, axis = -1)],
+                      [np.array(self.trees[index].data), predictions_int],
                       ['x', 'y', 'z', 'class'])
         
-        return predictions
+        return predictions, predictions_int
     
 class NPM3DGenerator_full(NPM3DGenerator):
     'Generates data for Keras'

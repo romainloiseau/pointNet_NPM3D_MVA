@@ -68,7 +68,7 @@ def random_rotate_z(cloud, normal = None):
                                 [0, 0, 1.]])
     
     if(normal is None):return cloud.dot(rotation_matrix), None
-    else:return cloud.dot(rotation_matrix), normal.dot(rotation_matrix)
+    else:return cloud.dot(rotation_matrix), refine_normals(normal.dot(rotation_matrix))
 
 def preprocess_cloud(cloud, normal = None, eigen = None):
     cloud -= np.mean(cloud, axis = 0)
@@ -105,6 +105,21 @@ class NPM3DGenerator(keras.utils.Sequence):
         if(self.compute_normals):self.n_channels += 2
         
         self.prepare_NPM3D()
+        
+    def print_config(self):
+        print("NPM3DGenerator config")
+        print("n_classes         : {}".format(self.n_classes))
+        print("batch_size        : {}".format(self.batch_size))
+        print("n_points          : {}".format(self.n_points))
+        print("n_channels        : {}".format(self.n_channels))
+        print("train             : {}".format(self.train))
+        if(self.use_normals):
+            print("use_normals       : {}".format(self.use_normals))
+            print("normal_radius     : {}".format(self.normal_radius))
+            print("compute_normals   : {}".format(self.compute_normals))
+        if(self.train):
+            print("class_weight      : {}".format(self.class_weight))
+                          
         
     def get_label(self, label):
         return to_categorical(label, num_classes = self.n_classes + 1)[:, 1:] 
