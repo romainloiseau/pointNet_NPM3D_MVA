@@ -17,46 +17,48 @@ def refine_normals(normals):
     return np.abs(normals)
     
 def compute_normals(tree, radius = .75, path = None, save = True):
-    npoints = len(np.array(tree.data))
+    cloud = np.array(tree.data)
+    npoints = len(cloud)
     if(not path is None):
-        print("not path is None", path)
+        print("MODIFIYING PATHS", path)
         normal_path = path[:-4] + "_normals.npy"
-        print(normal_path)
         eigen_path = path[:-4] + "_eigens.npy"
         
     if((path is None) or (not os.path.isfile(normal_path))):
-        print("path is None or not os.path.isfile(normal_path))")
+        print("COMPUTING NORMALS")
         max_points_in_cloud = 2000000
         if(npoints < max_points_in_cloud):
             try:
-                neighborhoods = tree.query_radius(np.array(tree.data), r = radius)
-                cov = np.array([get_cov(np.array(tree.data)[neighborhood]) for neighborhood in neighborhoods])
+                neighborhoods = tree.query_radius(cloud, r = radius)
+                print("pass 0")
+                cov = np.array([get_cov(cloud[neighborhood]) for neighborhood in neighborhoods])
+                print("pass 1")
             except:
                 print("EXCEPT")
-                cov = np.array([get_cov(np.array(tree.data)[tree.query_radius([point], r = radius)[0]]) for point in tqdm_notebook(np.array(tree.data))])
+                cov = np.array([get_cov(cloud[tree.query_radius([point], r = radius)[0]]) for point in tqdm_notebook(cloud)])
         else:
             n_splits = int(10 * npoints / max_points_in_cloud) + 1
             print("SPLITTING {}".format(n_splits))
-            cov = np.concatenate([np.array([get_cov(np.array(tree.data)[neighborhood]) for neighborhood in tree.query_radius(np.array(tree.data)[int(i * npoints / n_splits): int((i + 1) * npoints / n_splits)], r = radius)]) for i in tqdm_notebook(range(n_splits))], axis = 0)
+            cov = np.concatenate([np.array([get_cov(cloud[neighborhood]) for neighborhood in tree.query_radius(cloud[int(i * npoints / n_splits): int((i + 1) * npoints / n_splits)], r = radius)]) for i in tqdm_notebook(range(n_splits))], axis = 0)
         
         print(len(cov), npoints)
         eigen_values, eigen_vectors = np.linalg.eigh(cov)
         mini_eigen_values = np.argmin(eigen_values, axis = -1)
 
         normals = np.array([vectors[:, mini] for vectors, mini in zip(eigen_vectors, mini_eigen_values)])
-        normals = refine_normals((normals.transpose() / np.sum(normals**2, axis = -1)**.5).transpose())
+        normals = (normals.transpose() / np.sum(normals**2, axis = -1)**.5).transpose()
 
         sorted_eigenvalues = np.sort(eigen_values)
         sorted_eigenvalues = np.maximum(sorted_eigenvalues, 10**(-6))
         sorted_eigenvalues = (sorted_eigenvalues.transpose() / sorted_eigenvalues[:, -1]).transpose()[:, :-1]
         
         if(save and not path is None):
-            print("save and not path is None")
+            print("SAVING NORMALS")
             np.save(normal_path, normals)
             np.save(eigen_path, sorted_eigenvalues)
     
     else:
-        print("else", normal_path)
+        print("LOADING NORMALS", normal_path)
         normals = np.load(normal_path)
         sorted_eigenvalues = np.load(eigen_path)
         
@@ -69,13 +71,14 @@ def random_rotate_z(cloud, normal = None):
                                 [0, 0, 1.]])
     
     if(normal is None):return cloud.dot(rotation_matrix), None
-    else:return cloud.dot(rotation_matrix), refine_normals(normal.dot(rotation_matrix))
+    else:return cloud.dot(rotation_matrix), normal.dot(rotation_matrix)
 
 def preprocess_cloud(cloud, normal = None, eigen = None):
     cloud -= np.mean(cloud, axis = 0)
     cloud, normal = random_rotate_z(cloud, normal)
     if(normal is None):return cloud
     else:
+        normal = refine_normals(normal)
         if(eigen is None):return np.concatenate([cloud, normal], axis = -1)
         else:return np.concatenate([cloud, normal, eigen], axis = -1)
 
@@ -234,7 +237,7 @@ class NPM3DGenerator(keras.utils.Sequence):
 
         return clouds, labels
     
-    def predict_point_cloud(self, model, index = 0, epsilon_weights = .2, output_path = None):
+    def predict_point_cloud(self, model, index = 0, epsilon_weights = .5, output_path = None):
         all_indexes = np.arange(self.n_points_clouds[index])
         predictions = np.zeros((self.n_points_clouds[index], self.n_classes))
         weights = np.zeros(self.n_points_clouds[index])
