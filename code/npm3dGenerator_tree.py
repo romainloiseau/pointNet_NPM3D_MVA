@@ -7,6 +7,7 @@ from keras.utils import to_categorical
 from sklearn.neighbors import KDTree
 from plyfile import PlyData, PlyElement
 from ply import write_ply
+import joblib as joblib
 import keras
 
 def get_cov(points):
@@ -49,8 +50,6 @@ def compute_normals(tree, radius = .75, path = None, save = True):
         normals = (normals.transpose() / np.sum(normals**2, axis = -1)**.5).transpose()
 
         sorted_eigenvalues = np.sort(eigen_values)
-        sorted_eigenvalues = np.maximum(sorted_eigenvalues, 10**(-6))
-        sorted_eigenvalues = (sorted_eigenvalues.transpose() / sorted_eigenvalues[:, -1]).transpose()[:, :-1]
         
         if(save and not path is None):
             print("SAVING NORMALS")
@@ -62,6 +61,7 @@ def compute_normals(tree, radius = .75, path = None, save = True):
         normals = np.load(normal_path)
         sorted_eigenvalues = np.load(eigen_path)
         
+    sorted_eigenvalues = np.maximum(sorted_eigenvalues, 10**(-10))
     return normals, sorted_eigenvalues
 
 def random_rotate_z(cloud, normal = None):
@@ -73,21 +73,35 @@ def random_rotate_z(cloud, normal = None):
     if(normal is None):return cloud.dot(rotation_matrix), None
     else:return cloud.dot(rotation_matrix), normal.dot(rotation_matrix)
 
-def preprocess_cloud(cloud, normal = None, eigen = None):
-    cloud -= np.mean(cloud, axis = 0)
-    cloud, normal = random_rotate_z(cloud, normal)
-    if(normal is None):return cloud
-    else:
+def preprocess_cloud(cloud):#, normal = None, eigen = None):
+    #cloud -= np.mean(cloud, axis = 0)
+    #cloud, normal = random_rotate_z(cloud, normal)
+    #if(normal is None):return cloud
+    #else:
+        #normal = refine_normals(normal)
+        #if(eigen is None):return np.concatenate([cloud, normal], axis = -1)
+        #else:return np.concatenate([cloud, normal, eigen], axis = -1)
+    keys = [k for k in cloud.keys()]
+    xyz = cloud["cloud"] - np.mean(cloud["cloud"], axis = 0)
+    if("normal" in keys):
+        xyz, normal = random_rotate_z(xyz, cloud["normal"])
         normal = refine_normals(normal)
-        if(eigen is None):return np.concatenate([cloud, normal], axis = -1)
-        else:return np.concatenate([cloud, normal, eigen], axis = -1)
-
+        final_cloud = [xyz, normal]
+        if("eigen" in keys):
+            final_cloud += [cloud["eigen"]]
+    else:
+        xyz, _ = random_rotate_z(xyz, None)
+        final_cloud = [xyz]
+    if("reflectance" in keys):
+        final_cloud += [np.expand_dims(cloud["reflectance"], -1)]
+    return np.concatenate(final_cloud, axis = -1)
+    
 def from_categorical(label):
     return label.dot(1 + np.arange(label.shape[-1]))
 
 class NPM3DGenerator(keras.utils.Sequence):
     'Generates data for Keras'
-    def __init__(self, n_points = 4096, batch_size = 8, input_dir = "../Benchmark_MVA/training", train = True, paths_to_keep = None, use_normals = True, compute_normals = True, normal_radius = .75, sample_uniformly_from_classes = False):
+    def __init__(self, n_points = 4096, batch_size = 8, input_dir = "../Benchmark_MVA/training", train = True, evaluation = False, paths_to_keep = None, use_normals = True, compute_normals = True, normal_radius = .75, sample_uniformly_from_classes = False, use_reflectance = False, max_biggest_eigen = .4):
         'Initialization'
         
         self.class_dict = {0 : "unclassified", 1 : "ground", 2 : "buildings", 3 : "poles", 4 : "pedestrians", 5 : "cars", 6 : "vegetation"}
@@ -99,15 +113,19 @@ class NPM3DGenerator(keras.utils.Sequence):
         self.batch_size = batch_size
         self.n_points = n_points
         self.train = train
+        self.evaluation = evaluation
         self.sample_uniformly_from_classes = sample_uniformly_from_classes
         self.normal_radius = normal_radius
         self.use_normals = use_normals
         self.compute_normals = use_normals and compute_normals
+        self.max_biggest_eigen = max_biggest_eigen
         self.use_CCcomputed_normals = use_normals and not compute_normals
-        
+        self.use_reflectance = use_reflectance
+                 
         self.n_channels = 3
+        if(self.use_reflectance):self.n_channels += 1        
         if(self.use_normals):self.n_channels += 3
-        if(self.compute_normals):self.n_channels += 2
+        if(self.compute_normals):self.n_channels += 3
         
         self.prepare_NPM3D()
     
@@ -133,24 +151,48 @@ class NPM3DGenerator(keras.utils.Sequence):
     def load_point_cloud(self, input_dir):
         data = PlyData.read(input_dir)
         columns = ["x", "y", "z"]
-        if(self.use_CCcomputed_normals):columns += ["nx", "ny", "nz", "scalar_class"]
-        else:columns += ["class"]
+        if(self.use_CCcomputed_normals):columns += ["nx", "ny", "nz"]
+        if(self.use_reflectance):columns += ["reflectance"]
+        columns += ["class"]
         data = np.array([data.elements[0].data[i] for i in columns[:len(data.elements[0].properties)]]).transpose()
-        tree = KDTree(data[:, :3])
+        """
+        for i in range(3):
+            plt.hist(data[:, i])
+            plt.show()
+        """
+        
+        tree_path = input_dir[:-4] + "_tree.joblib"
+        print(tree_path)
+        if(os.path.isfile(tree_path)):
+            print("LOADING TREE")
+            tree = joblib.load(tree_path)
+            if(np.mean(np.array(tree.data) == data[:, :3]) != 1):
+                raise ValueError("THE LOADED TREE ISN'T THE ONE ASSOCIATED TO THIS DATA")
+        else:
+            print("COMPUTING TREE")
+            tree = KDTree(data[:, :3], metric = "euclidean")
+            joblib.dump(tree, tree_path)
+        print("DONE")
         normal = None
         eigen = None
+        reflectance = None
         if(self.use_normals):
             if(self.use_CCcomputed_normals):
                 normal = data[:, 3:6]
             else:
                 normal, eigen = compute_normals(tree, self.normal_radius, input_dir)
+        if(self.use_reflectance):reflectance = data[:, -2] / 255.
         label = self.get_label(data[:, -1]) if self.train else None
-        return tree, normal, eigen, label
+        return tree, normal, eigen, reflectance, label
     
     def compute_class_weight(self):
+        """
         sum_labels = np.mean(np.concatenate(self.labels), axis = 0)
         sum_labels = np.clip(sum_labels, .0001, 1.)
         self.class_weight = 1. / sum_labels
+        """
+        #self.class_weight = np.array([ 2.48904064,  3.53694259, 62.30171678, 23.44471258,  8.60931716, 7.10979527])
+        self.class_weight = np.array([ 2.77362278,  3.99426094, 37.20384495, 15.52374327,  7.15863926, 6.32456057])
     
     def prepare_NPM3D(self):
         self.paths = os.listdir(self.input_dir)
@@ -162,13 +204,18 @@ class NPM3DGenerator(keras.utils.Sequence):
         self.trees = []
         if(self.use_normals):self.normals = []
         if(self.compute_normals):self.eigens = []
+        if(self.use_reflectance):self.reflectances = []
         if(self.train):self.labels = []
         
         for path in tqdm_notebook(self.paths):
-            tree, normal, eigen, label = self.load_point_cloud(os.path.join(self.input_dir, path))
+            tree, normal, eigen, reflectance, label = self.load_point_cloud(os.path.join(self.input_dir, path))
             self.trees.append(tree)
-            if(self.use_normals):self.normals.append(normal)
-            if(self.compute_normals):self.eigens.append(eigen)
+            if(self.use_normals):
+                 self.normals.append(normal)
+                 if(self.compute_normals):
+                    eigen = np.concatenate([(eigen.transpose() / eigen[:, -1]).transpose()[:, :-1], np.array([eigen[:, -1] / self.max_biggest_eigen]).transpose()], axis = -1)
+                    self.eigens.append(eigen)
+            if(self.use_reflectance):self.reflectances.append(reflectance)
             if(self.train):self.labels.append(label)
         
         self.n_points_clouds = np.array([len(tree.data) for tree in self.trees])
@@ -195,31 +242,45 @@ class NPM3DGenerator(keras.utils.Sequence):
 
         return X, y
     
-    def choose_center_point(self, index = 0):
+    def choose_center_point(self, index = 0, chosen_label = None):
         if(self.train and self.sample_uniformly_from_classes):
-            chosen_label = np.random.randint(self.n_classes)
+            if chosen_label is None:chosen_label = np.random.randint(self.n_classes)
             chosen_indexes = np.where(self.labels_as_int[index] == chosen_label)[0]
             if(len(chosen_indexes) > 0):
                 center_points_index = chosen_indexes[np.random.randint(len(chosen_indexes))]
             else:
-                center_points_index = np.random.randint(self.n_points_clouds[index])
+                if self.evaluation:center_points_index = np.random.randint(self.n_points_clouds[index])
+                else:return None
         else:
             center_points_index = np.random.randint(self.n_points_clouds[index])
         return center_points_index
     
     def sample_point_cloud(self, index = 0, center_points_index = None):
-        if(center_points_index is None):
-            center_points_index = self.choose_center_point(index)
-            print(center_points_index)
+        if center_points_index is None:center_points_index = self.choose_center_point(index)
+        if center_points_index is None:
+            index = min(2, self.n_clouds - 1)
+            center_points_index = self.choose_center_point(index, 3)
                 
         cloud = np.array(self.trees[index].data)
         dist, ind = self.trees[index].query([cloud[center_points_index]], k = self.n_points)
         dist, ind = dist[0], ind[0]
         
+        to_preprocess = {"cloud": cloud[ind]}
+        if(self.use_normals):
+            to_preprocess["normal"] = self.normals[index][ind]
+            if(self.compute_normals):
+                to_preprocess["eigen"] = self.eigens[index][ind]
+        if(self.use_reflectance):
+            to_preprocess["reflectance"] = self.reflectances[index][ind]
+            
+        cloud = preprocess_cloud(to_preprocess)
+       
+        """
         if(self.use_normals):
             if(self.compute_normals):cloud = preprocess_cloud(cloud[ind], self.normals[index][ind], self.eigens[index][ind])
             else:cloud = preprocess_cloud(cloud[ind], self.normals[index][ind])
         else:cloud = preprocess_cloud(cloud[ind])
+        """
         
         if(self.train):
             label = self.labels[index][ind]
@@ -282,26 +343,32 @@ class NPM3DGenerator(keras.utils.Sequence):
     
 class NPM3DGenerator_full(NPM3DGenerator):
     'Generates data for Keras'
-    def __init__(self, n_points = 4096, batch_size = 8, input_dir = "../Benchmark/training_10_classes", train = True, paths_to_keep = None, use_normals = False, compute_normals = True, normal_radius = .75):
+    def __init__(self, n_points = 4096, batch_size = 8, input_dir = "../Benchmark/training_10_classes_subsampled_2", train = True, evaluation = False, paths_to_keep = None, use_normals = False, compute_normals = True, normal_radius = .75, sample_uniformly_from_classes = False, dataset_predicted = "full", use_reflectance = True, max_biggest_eigen = .4):
+        
         'Initialization'
         
-        self.class_dict = {0 : "unclassified",
-                           1 : "ground",
-                           2 : "buildings",
-                           3 : "poles",
-                           4 : "pedestrians",
-                           5 : "cars",
-                           6 : "vegetation"}
-        self.coarse_classes_dict = {0 : "unclassified",
-                                    1 : "ground",
-                                    2 : "building",
-                                    3 : "pole - road sign - traffic light",
-                                    4 : "bollard - small pole",
-                                    5 : "trash can",
-                                    6 : "barrier",
-                                    7 : "pedestrian",
-                                    8 : "car",
-                                    9 : "natural - vegetation"}       
+        self.dataset_predicted = dataset_predicted
+        assert self.dataset_predicted in ["full", "mva"]
+        if(self.dataset_predicted == "full"):
+            self.class_dict = {0 : "unclassified",
+                               1 : "ground",
+                               2 : "building",
+                               3 : "pole - road sign - traffic light",
+                               4 : "bollard - small pole",
+                               5 : "trash can",
+                               6 : "barrier",
+                               7 : "pedestrian",
+                               8 : "car",
+                               9 : "natural - vegetation"}
+        elif(self.dataset_predicted == "mva"):
+            self.class_dict = {0 : "unclassified",
+                               1 : "ground",
+                               2 : "buildings",
+                               3 : "poles",
+                               4 : "pedestrians",
+                               5 : "cars",
+                               6 : "vegetation"}
+            
         self.n_classes = len(self.class_dict) - 1
         
         self.input_dir = input_dir
@@ -310,14 +377,18 @@ class NPM3DGenerator_full(NPM3DGenerator):
         self.batch_size = batch_size
         self.n_points = n_points
         self.train = train
+        self.evaluation = evaluation
+        self.sample_uniformly_from_classes = sample_uniformly_from_classes
         self.normal_radius = normal_radius
         self.use_normals = use_normals
+        self.max_biggest_eigen = max_biggest_eigen
         self.compute_normals = use_normals and compute_normals
         self.use_CCcomputed_normals = use_normals and not compute_normals
-        
+        self.use_reflectance = use_reflectance
         self.n_channels = 3
+        if(self.use_reflectance):self.n_channels += 1
         if(self.use_normals):self.n_channels += 3
-        if(self.compute_normals):self.n_channels += 2
+        if(self.compute_normals):self.n_channels += 3
         
         self.prepare_NPM3D()
     
@@ -337,4 +408,7 @@ class NPM3DGenerator_full(NPM3DGenerator):
         return label
         
     def get_label(self, label):
-        return to_categorical(self.from_coarse_to_global_labels(label), num_classes = self.n_classes + 1)[:, 1:] 
+        if(self.dataset_predicted == "full"):
+            return to_categorical(label, num_classes = self.n_classes + 1)[:, 1:]
+        else:
+            return to_categorical(self.from_coarse_to_global_labels(label), num_classes = self.n_classes + 1)[:, 1:] 

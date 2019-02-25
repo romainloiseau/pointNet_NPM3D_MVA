@@ -2,13 +2,18 @@ import numpy as np
 from keras.models import Model
 from keras.layers import Input, Conv1D, Lambda, MaxPooling1D, Flatten, Dense, Reshape, RepeatVector, Concatenate
 from keras import backend as K
+import tensorflow as tf
 from tensorflow.python.keras.models import model_from_json
 
-def build_point_net(input_shape = (2048, 3), output_shape = 10, mode = "segmentation"):
+def build_point_net(input_shape = (2048, 3), output_shape = 10, refined_points = 25, mode = "segmentation", method = "original"):
     
     assert mode in ["classification", "segmentation"]
+    assert method in ["original", "refined"]
 
     features = Input(input_shape, name = "input_features")
+    if(method == "refined"):
+        indexes = Input((input_shape[0], refined_points), dtype = "int32", name = "input_features")
+        print(indexes)
     
     def multiply(input_tensors):
         dot = K.batch_dot(input_tensors[0], input_tensors[1])
@@ -16,6 +21,15 @@ def build_point_net(input_shape = (2048, 3), output_shape = 10, mode = "segmenta
     
     transform3 = build_T_net((input_shape[0], input_shape[1]), name = "T_net_3")(features)
     transformed3 = Lambda(multiply, name = "transformed3")([features, transform3])
+    
+    def gather(input_tensors):
+        gathered = K.gather(input_tensors[0], input_tensors[1])
+        print(gathered)
+        return gathered
+    
+    if(method == "refined"):
+        around = Lambda(gather, name = "transformed3")([transformed3, indexes])
+        print(around)
     
     conv10 = Conv1D(filters = 64, kernel_size = (1), padding = 'valid', strides = (1), activation = "relu", name = "conv10")(transformed3)
     conv11 = Conv1D(filters = 64, kernel_size = (1), padding = 'valid', strides = (1), activation = "relu", name = "conv11")(conv10)
