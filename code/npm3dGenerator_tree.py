@@ -343,7 +343,7 @@ class NPM3DGenerator(keras.utils.Sequence):
     
 class NPM3DGenerator_full(NPM3DGenerator):
     'Generates data for Keras'
-    def __init__(self, n_points = 4096, batch_size = 8, input_dir = "../Benchmark/training_10_classes_subsampled_2", train = True, evaluation = False, paths_to_keep = None, use_normals = False, compute_normals = True, normal_radius = .75, sample_uniformly_from_classes = False, dataset_predicted = "full", use_reflectance = True, max_biggest_eigen = .4):
+    def __init__(self, n_points = 4096, batch_size = 8, input_dir = "../Benchmark/training_10_classes_subsampled_2", train = True, evaluation = False, paths_to_keep = None, use_normals = True, compute_normals = True, normal_radius = .75, sample_uniformly_from_classes = False, dataset_predicted = "full", use_reflectance = True, max_biggest_eigen = .4):
         
         'Initialization'
         
@@ -411,4 +411,12 @@ class NPM3DGenerator_full(NPM3DGenerator):
         if(self.dataset_predicted == "full"):
             return to_categorical(label, num_classes = self.n_classes + 1)[:, 1:]
         else:
-            return to_categorical(self.from_coarse_to_global_labels(label), num_classes = self.n_classes + 1)[:, 1:] 
+            return to_categorical(self.from_coarse_to_global_labels(label), num_classes = self.n_classes + 1)[:, 1:]
+        
+    def compute_class_weight(self):
+        """
+        sum_labels = np.mean(np.concatenate(self.labels), axis = 0)
+        sum_labels = np.clip(sum_labels, .0001, 1.)
+        self.class_weight = 1. / sum_labels
+        """
+        self.class_weight = np.array([2.282537, 5.243769, 33.179123, 169.81613, 32.47143, 15.554446, 24.446503, 13.716806, 7.919863])

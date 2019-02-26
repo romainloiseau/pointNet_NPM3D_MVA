@@ -1,3 +1,4 @@
+*.zip
 *.joblib
 *.h5
 *.json
