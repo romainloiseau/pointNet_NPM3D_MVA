@@ -181,7 +181,11 @@ class NPM3DGenerator(keras.utils.Sequence):
                 normal = data[:, 3:6]
             else:
                 normal, eigen = compute_normals(tree, self.normal_radius, input_dir)
-        if(self.use_reflectance):reflectance = data[:, -2] / 255.
+        if(self.use_reflectance):
+            plt.hist(data[:, -2])
+            plt.show()
+            #reflectance = data[:, -2] / 255.
+            reflectance = (data[:, -2] - np.min(data[:, -2])) / (np.max(data[:, -2]) - np.min(data[:, -2]))
         label = self.get_label(data[:, -1]) if self.train else None
         return tree, normal, eigen, reflectance, label
     
