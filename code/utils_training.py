@@ -4,7 +4,7 @@ from keras import backend as K
 import tensorflow as tf
 
 def my_categorical_crossentropy(y_true, y_pred):
-    return K.mean(K.sum(y_true, axis = -1)) * K.categorical_crossentropy(y_true, y_pred)
+    return K.categorical_crossentropy(y_true, y_pred) / K.mean(K.sum(y_true, axis = -1))
 
 class mIoU(object):
     def __init__(self, num_classes):
