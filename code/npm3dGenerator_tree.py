@@ -1,5 +1,6 @@
 import os
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import time
 from tqdm import tqdm_notebook
@@ -101,7 +102,7 @@ def from_categorical(label):
 
 class NPM3DGenerator(keras.utils.Sequence):
     'Generates data for Keras'
-    def __init__(self, n_points = 4096, batch_size = 8, input_dir = "../Benchmark_MVA/training", train = True, evaluation = False, paths_to_keep = None, use_normals = True, compute_normals = True, normal_radius = .75, sample_uniformly_from_classes = False, use_reflectance = False, max_biggest_eigen = .4, ignore_unpresent_label = True):
+    def __init__(self, n_points = 4096, batch_size = 8, input_dir = "../Benchmark_MVA/training", train = True, evaluation = False, paths_to_keep = None, use_normals = True, compute_normals = True, normal_radius = .75, sample_uniformly_from_classes = False, use_reflectance = False, max_biggest_eigen = .4, ignore_unpresent_label = False):
         'Initialization'
         
         self.class_dict = {0 : "unclassified", 1 : "ground", 2 : "buildings", 3 : "poles", 4 : "pedestrians", 5 : "cars", 6 : "vegetation"}
@@ -143,11 +144,41 @@ class NPM3DGenerator(keras.utils.Sequence):
             output += "normal_radius     : {}\n".format(self.normal_radius)
             output += "compute_normals   : {}\n".format(self.compute_normals)
         if(self.train):
-            output += "class_weight      : {}".format(np.array2string(self.class_weight, formatter={'float_kind':lambda x: "%.2f" % x}))
+            output += "class_weight      : {}".format(np.array2string(self.class_weight, formatter={'float_kind':lambda x: "%.5f" % x}))
         return output
         
     def get_label(self, label):
         return to_categorical(label, num_classes = self.n_classes + 1)[:, 1:]
+    
+    def get_data(self, n_per_classes = 256):
+        
+        path = os.path.join(self.input_dir, "chosen_points_{}.csv".format(n_per_classes))
+        n_center_points = n_per_classes * self.n_classes
+        if not os.path.isfile(path):
+            clouds_indexes = np.random.choice(self.n_clouds, n_center_points, p = self.n_points_clouds / self.n_points_total)
+            chosen_labels = np.arange(n_center_points) % self.n_classes
+            center_points = [self.choose_center_point(index = index, chosen_label = chosen_label) for index, chosen_label in zip(clouds_indexes, chosen_labels)]
+            #labels = np.array([self.labels[index][center_point] for index, center_point in zip(clouds_indexes, center_points)])
+            paths = [self.paths[index] for index in clouds_indexes]
+            
+            data = pd.DataFrame(np.array([paths, center_points]).transpose(), columns = ["paths", "center_points"])
+            data.to_csv(path, index=False)
+            
+        else:
+            data = pd.read_csv(path)
+            
+        data = data.as_matrix()
+           
+        clouds = np.empty((n_center_points, self.n_points, self.n_channels))
+        labels = np.empty((n_center_points, self.n_points, self.n_classes))
+        for i in tqdm_notebook(range(len(data)), leave = False):
+            row = data[i]
+            cloud, label = self.sample_point_cloud(index = self.paths.index(row[0]), center_points_index = int(row[1]))
+            clouds[i] = cloud.copy()
+            labels[i] = label.copy()
+            #print(cloud.shape, label.shape, np.mean(label, axis = 0))
+            
+        return clouds, labels
     
     def show_samples(self):
         item = self.__getitem__(0)
@@ -222,8 +253,11 @@ class NPM3DGenerator(keras.utils.Sequence):
             #self.class_weight = np.array([ 2.77362278,  3.99426094, 37.20384495, 15.52374327,  7.15863926, 6.32456057])
         else:
             sum_labels = np.mean(np.concatenate(self.labels), axis = 0)
+        zeros = sum_labels == 0
         sum_labels = np.clip(sum_labels, .0001, 1.)
         self.class_weight = 1. / sum_labels
+        self.class_weight[zeros] = 0
+        self.class_weight /= np.mean(self.class_weight[~zeros])
         
     def prepare_NPM3D(self):
         self.paths = os.listdir(self.input_dir)
@@ -241,9 +275,9 @@ class NPM3DGenerator(keras.utils.Sequence):
         for path in tqdm_notebook(self.paths):
             tree, normal, eigen, reflectance, label = self.load_point_cloud(os.path.join(self.input_dir, path))
             self.trees.append(tree)
-            if(self.use_normals):
-                 self.normals.append(normal)
-                 if(self.compute_normals):
+            if self.use_normals:
+                self.normals.append(normal)
+                if(self.compute_normals):
                     eigen = np.concatenate([(eigen.transpose() / eigen[:, -1]).transpose()[:, :-1], np.array([eigen[:, -1] / self.max_biggest_eigen]).transpose()], axis = -1)
                     self.eigens.append(eigen)
             if(self.use_reflectance):self.reflectances.append(reflectance)
@@ -255,8 +289,7 @@ class NPM3DGenerator(keras.utils.Sequence):
         self.n_clouds = len(self.trees)
         
         if(self.train):
-            if(self.sample_uniformly_from_classes):
-                self.labels_as_int = [label.dot(np.arange(self.n_classes)) for label in self.labels]
+            self.labels_as_int = [label.dot(np.arange(self.n_classes)) for label in self.labels]
             self.compute_class_weight()
     
     def __len__(self):
@@ -274,7 +307,7 @@ class NPM3DGenerator(keras.utils.Sequence):
         return X, y
     
     def choose_center_point(self, index = 0, chosen_label = None):
-        if(self.train and self.sample_uniformly_from_classes):
+        if(self.train and self.sample_uniformly_from_classes) or chosen_label is not None:
             if chosen_label is None:chosen_label = np.random.randint(self.n_classes)
             chosen_indexes = np.where(self.labels_as_int[index] == chosen_label)[0]
             if(len(chosen_indexes) > 0):
@@ -444,7 +477,7 @@ class NPM3DGenerator_full(NPM3DGenerator):
         else:
             return to_categorical(self.from_coarse_to_global_labels(label), num_classes = self.n_classes + 1)[:, 1:]
         
-     
+    """
     def compute_class_weight(self):
         if(self.sample_uniformly_from_classes):
             self.class_weight = np.array([2.282537, 5.243769, 33.179123, 169.81613, 32.47143, 15.554446, 24.446503, 13.716806, 7.919863])
@@ -452,3 +485,4 @@ class NPM3DGenerator_full(NPM3DGenerator):
             sum_labels = np.mean(np.concatenate(self.labels), axis = 0)
             sum_labels = np.clip(sum_labels, .0001, 1.)
             self.class_weight = 1. / sum_labels
+    """

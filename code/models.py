@@ -5,7 +5,7 @@ from keras import backend as K
 import tensorflow as tf
 from tensorflow.python.keras.models import model_from_json
 
-def build_point_net(input_shape = (2048, 3), output_shape = 10, refined_points = 25, mode = "segmentation", normalize = True):
+def build_point_net(input_shape = (2048, 3), output_shape = 10, refined_points = 25, mode = "segmentation", normalize = False):
     
     assert mode in ["classification", "segmentation"]
 
@@ -139,7 +139,7 @@ def load_model(input_path):
     json_file.close()
     #loaded_model = model_from_json(loaded_model_json, {'TransformLayer': TransformLayer})
     params = input_path.split("_")
-    loaded_model = build_point_net(input_shape = (int(params[-3]), int(params[-2])), output_shape = int(params[-1]))
+    loaded_model = build_point_net(input_shape = (int(params[1]), int(params[2])), output_shape = int(params[3]))
     loaded_model.load_weights(input_path + '.h5')
     print("Loaded model from disk")
     
