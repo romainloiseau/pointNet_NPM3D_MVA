@@ -9,6 +9,7 @@ from sklearn.neighbors import KDTree
 from plyfile import PlyData, PlyElement
 from ply import write_ply
 import joblib as joblib
+from scipy.io import savemat
 import keras
 
 def get_cov(points):
@@ -247,12 +248,15 @@ class NPM3DGenerator(keras.utils.Sequence):
         return tree, normal, eigen, reflectance, label
     
     def compute_class_weight(self):
+        """
         if(self.sample_uniformly_from_classes):
             sum_labels = np.mean(np.concatenate([np.concatenate(self.__getitem__(0)[-1]) for i in range(10 * self.n_classes)]), axis = 0)
             #self.class_weight = np.array([ 2.48904064,  3.53694259, 62.30171678, 23.44471258,  8.60931716, 7.10979527])
             #self.class_weight = np.array([ 2.77362278,  3.99426094, 37.20384495, 15.52374327,  7.15863926, 6.32456057])
         else:
             sum_labels = np.mean(np.concatenate(self.labels), axis = 0)
+        """
+        sum_labels = np.mean(np.concatenate(self.labels), axis = 0)
         zeros = sum_labels == 0
         sum_labels = np.clip(sum_labels, .0001, 1.)
         self.class_weight = 1. / sum_labels
@@ -304,6 +308,8 @@ class NPM3DGenerator(keras.utils.Sequence):
         # Generate data
         X, y = self.__data_generation(indexes)
 
+        if self.train and not self.evaluation:
+            X += np.random.normal(loc = 0, scale = .01, size = X.shape)
         return X, y
     
     def choose_center_point(self, index = 0, chosen_label = None):
@@ -367,7 +373,7 @@ class NPM3DGenerator(keras.utils.Sequence):
 
         return clouds, labels
     
-    def predict_point_cloud(self, model, index = 0, epsilon_weights = .5, output_path = None):
+    def predict_point_cloud(self, model, index = 0, epsilon_weights = 3, output_path = None):
         all_indexes = np.arange(self.n_points_clouds[index])
         predictions = np.zeros((self.n_points_clouds[index], self.n_classes))
         weights = np.zeros(self.n_points_clouds[index])
@@ -376,7 +382,7 @@ class NPM3DGenerator(keras.utils.Sequence):
         while np.min(weights) < epsilon_weights:
             center_points_indexes = all_indexes[weights < epsilon_weights]
             cloud, ind, dist = self.sample_point_cloud(index = index, center_points_index = center_points_indexes[np.random.randint(len(center_points_indexes))])
-            weight = 1. / np.clip(dist, .1 * np.max(dist), 10.)
+            weight = 1. / np.clip(dist, 1, 10.) #np.clip(dist, .1 * np.max(dist), 10.)
             
             prediction = model.predict(np.expand_dims(cloud, axis = 0))[0]
             predictions[ind] += (prediction.transpose() * weight).transpose() 
@@ -394,6 +400,8 @@ class NPM3DGenerator(keras.utils.Sequence):
         
         if(output_path is None):output_path = self.paths[index].split(".")[0] + "_prediction.ply"
         
+        savemat(output_path[:-4] + "_probas.mat", {"initial_classif": predictions})
+        np.save(output_path[:-4] + "_probas.npy", predictions)
         if(self.use_normals):
             write_ply(output_path,
                       [np.array(self.trees[index].data), self.normals[index], predictions_int],
