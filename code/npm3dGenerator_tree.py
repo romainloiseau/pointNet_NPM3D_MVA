@@ -182,10 +182,13 @@ class NPM3DGenerator(keras.utils.Sequence):
         return clouds, labels
     
     def show_samples(self):
-        item = self.__getitem__(0)
+        if self.train:
+            item = self.__getitem__(0)
 
-        labels = np.concatenate(item[1], axis = 0)
-        features = np.concatenate(item[0], axis = 0)
+            labels = np.concatenate(item[1], axis = 0)
+            features = np.concatenate(item[0], axis = 0)
+        else:
+            features = np.concatenate([self.sample_point_cloud(index = np.random.randint(self.n_clouds))[0] for i in range(16)], axis = 0)
         
         titles = ["x", "y", "z", "nx", "ny", "nz", "l1/l3", "l2/l3", "l3", "label"]
         
@@ -293,7 +296,7 @@ class NPM3DGenerator(keras.utils.Sequence):
         self.n_clouds = len(self.trees)
         
         if(self.train):
-            self.labels_as_int = [label.dot(np.arange(self.n_classes)) for label in self.labels]
+            self.labels_as_int = [(1 + label.dot(np.arange(self.n_classes))) * np.sum(label, axis = -1) for label in self.labels]
             self.compute_class_weight()
     
     def __len__(self):
@@ -315,7 +318,7 @@ class NPM3DGenerator(keras.utils.Sequence):
     def choose_center_point(self, index = 0, chosen_label = None):
         if(self.train and self.sample_uniformly_from_classes) or chosen_label is not None:
             if chosen_label is None:chosen_label = np.random.randint(self.n_classes)
-            chosen_indexes = np.where(self.labels_as_int[index] == chosen_label)[0]
+            chosen_indexes = np.where(self.labels_as_int[index] == 1 + chosen_label)[0]
             if(len(chosen_indexes) > 0):
                 center_points_index = chosen_indexes[np.random.randint(len(chosen_indexes))]
             else:
@@ -373,26 +376,43 @@ class NPM3DGenerator(keras.utils.Sequence):
 
         return clouds, labels
     
-    def predict_point_cloud(self, model, index = 0, epsilon_weights = 3, output_path = None):
+    def predict_point_cloud(self, model, index = 0, epsilon_weights = 3, confidence_threshold = .75, output_path = None):
         all_indexes = np.arange(self.n_points_clouds[index])
         predictions = np.zeros((self.n_points_clouds[index], self.n_classes))
         weights = np.zeros(self.n_points_clouds[index])
         
-        pbar, pbar_value, pbar_update = tqdm_notebook(total=100), 0, 0
+        t = time.time()
+        time_delay = 1800
+        
+        pbar, pbar_value, pbar_update = tqdm_notebook(total=1000), 0, 0
         while np.min(weights) < epsilon_weights:
             center_points_indexes = all_indexes[weights < epsilon_weights]
             cloud, ind, dist = self.sample_point_cloud(index = index, center_points_index = center_points_indexes[np.random.randint(len(center_points_indexes))])
             weight = 1. / np.clip(dist, 1, 10.) #np.clip(dist, .1 * np.max(dist), 10.)
             
             prediction = model.predict(np.expand_dims(cloud, axis = 0))[0]
+            
+            max_prediction = np.max(prediction, axis = -1)
+            to_zeros = max_prediction < confidence_threshold
+            #print(max_prediction.shape, weight.shape, np.mean(to_zeros), np.min(max_prediction), np.mean(max_prediction), np.max(max_prediction))
+            
+            prediction[to_zeros] = 0
+            weight[to_zeros] = 0
+            
             predictions[ind] += (prediction.transpose() * weight).transpose() 
             weights[ind] += weight
             
             int_pbar_value = int(pbar_value)
-            pbar_value = 100 * np.mean(weights > epsilon_weights)
+            pbar_value = 1000 * np.mean(weights > epsilon_weights)
             pbar_update = int(pbar_value) - int_pbar_value
-            for i in range(pbar_update):
+            for _ in range(pbar_update):
                 pbar.update()
+                
+            if time.time() - t > time_delay:
+                t = time.time()
+                time_delay /= 2
+                confidence_threshold = min(.25, confidence_threshold / 2.)                                              
+                print("confidence_threshold, time_delay ==>", confidence_threshold, time_delay)
         pbar.close()
         
         predictions = (predictions.transpose() / weights).transpose()
