@@ -1,10 +1,9 @@
 import numpy as np
 from keras.models import Model
-from keras.layers import Input, Conv1D, Lambda, MaxPooling1D, Flatten, Dense, Reshape, RepeatVector, Concatenate
+from keras.layers import Input, Conv1D, Lambda, MaxPooling1D, Flatten, Dense, Reshape, RepeatVector, Concatenate, BatchNormalization
 from keras import backend as K
 import tensorflow as tf
 from tensorflow.python.keras.models import model_from_json
-from myBN import MyBN
 
 def build_point_net(input_shape = (2048, 3), output_shape = 10, refined_points = 25, mode = "segmentation", normalize = False):
     
@@ -125,6 +124,23 @@ def build_T_net(input_shape = (2048, 3), normalize = True, name = ""):
     else:model = Model(inputs = features, outputs = transform)
     
     return model
+
+class MyBN(Layer):
+    def __init__(self, **kwargs):
+        super(MyBN, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        # Create a trainable weight variable for this layer.
+        print(input_shape)
+        self.bn = tf.layers.BatchNormalization(axis = -1)
+        super(MyBN, self).build(input_shape)  # Be sure to call this at the end
+
+    def call(self, x):
+        return tf.map_fn(lambda xx: self.bn(xx), x)
+
+    def compute_output_shape(self, input_shape):
+        return input_shape
+    
 
 def save_model(model, output_path):
     model_json = model.to_json()
