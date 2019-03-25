@@ -1,9 +1,10 @@
 import numpy as np
 from keras.models import Model
-from keras.layers import Input, Conv1D, Lambda, MaxPooling1D, Flatten, Dense, Reshape, RepeatVector, Concatenate, BatchNormalization
+from keras.layers import Input, Conv1D, Lambda, MaxPooling1D, Flatten, Dense, Reshape, RepeatVector, Concatenate
 from keras import backend as K
 import tensorflow as tf
 from tensorflow.python.keras.models import model_from_json
+from myBN import MyBN
 
 def build_point_net(input_shape = (2048, 3), output_shape = 10, refined_points = 25, mode = "segmentation", normalize = False):
     
@@ -19,32 +20,32 @@ def build_point_net(input_shape = (2048, 3), output_shape = 10, refined_points =
     transformed3 = Lambda(multiply, name = "transformed3")([features, transform3])
     
     conv10 = Conv1D(filters = 64, kernel_size = (1), padding = 'valid', strides = (1), activation = "relu", name = "conv10")(transformed3)
-    if normalize:conv10 = BatchNormalization(name = "conv10_bn")(conv10)
+    if normalize:conv10 = MyBN(name = "conv10_bn")(conv10)
     
     conv11 = Conv1D(filters = 64, kernel_size = (1), padding = 'valid', strides = (1), activation = "relu", name = "conv11")(conv10)
-    if normalize:conv11 = BatchNormalization(name = "conv11_bn")(conv11)
+    if normalize:conv11 = MyBN(name = "conv11_bn")(conv11)
         
     transform64 = build_T_net((input_shape[0], 64), normalize = normalize, name = "T_net_64")(conv11)
     transformed64 = Lambda(multiply, name = "transformed64")([conv11, transform64])
     
     conv20 = Conv1D(filters = 64, kernel_size = (1), padding = 'valid', strides = (1), activation = "relu", name = "conv20")(transformed64)
-    if normalize:conv20 = BatchNormalization(name = "conv20_bn")(conv20)
+    if normalize:conv20 = MyBN(name = "conv20_bn")(conv20)
         
     conv21 = Conv1D(filters = 128, kernel_size = (1), padding = 'valid', strides = (1), activation = "relu", name = "conv21")(conv20)
-    if normalize:conv21 = BatchNormalization(name = "conv21_bn")(conv21)
+    if normalize:conv21 = MyBN(name = "conv21_bn")(conv21)
         
     conv22 = Conv1D(filters = 1024, kernel_size = (1), padding = 'valid', strides = (1), activation = "relu", name = "conv22")(conv21)
-    if normalize:conv22 = BatchNormalization(name = "conv22_bn")(conv22)
+    if normalize:conv22 = MyBN(name = "conv22_bn")(conv22)
         
     global_features = MaxPooling1D(pool_size = input_shape[0], strides = None, padding = "valid")(conv22)
     global_features = Flatten()(global_features)
     
     if(mode == "classification"):
         dense0 = Dense(512, activation = "relu", name = "dense0")(global_features)
-        if normalize:dense0 = BatchNormalization(name = "dense0_bn")(dense0)
+        if normalize:dense0 = MyBN(name = "dense0_bn")(dense0)
             
         dense1 = Dense(256, activation = "relu", name = "dense1")(dense0)
-        if normalize:dense1 = BatchNormalization(name = "dense1_bn")(dense1)
+        if normalize:dense1 = MyBN(name = "dense1_bn")(dense1)
             
         dense2 = Dense(output_shape, activation = "softmax")(dense1)
     
@@ -56,16 +57,16 @@ def build_point_net(input_shape = (2048, 3), output_shape = 10, refined_points =
         input_segmentation = Concatenate()([transformed3, conv21, transformed64, RepeatVector(input_shape[0])(global_features)])
         
         conv30 = Conv1D(filters = 512, kernel_size = (1), padding = 'valid', strides = (1), activation = "relu", name = "conv30")(input_segmentation)
-        if normalize:conv30 = BatchNormalization(name = "conv30_bn")(conv30)
+        if normalize:conv30 = MyBN(name = "conv30_bn")(conv30)
             
         conv31 = Conv1D(filters = 256, kernel_size = (1), padding = 'valid', strides = (1), activation = "relu", name = "conv31")(conv30)
-        if normalize:conv31 = BatchNormalization(name = "conv31_bn")(conv31)
+        if normalize:conv31 = MyBN(name = "conv31_bn")(conv31)
             
         conv32 = Conv1D(filters = 128, kernel_size = (1), padding = 'valid', strides = (1), activation = "relu", name = "conv32")(conv31)
-        if normalize:conv32 = BatchNormalization(name = "conv32_bn")(conv32)
+        if normalize:conv32 = MyBN(name = "conv32_bn")(conv32)
             
         conv33 = Conv1D(filters = 128, kernel_size = (1), padding = 'valid', strides = (1), activation = "relu", name = "conv33")(conv32)
-        if normalize:conv33 = BatchNormalization(name = "conv33_bn")(conv33)
+        if normalize:conv33 = MyBN(name = "conv33_bn")(conv33)
             
         conv34 = Conv1D(filters = output_shape, kernel_size = (1), padding = 'valid', strides = (1), activation = "softmax", name = "conv34")(conv33)
         
@@ -100,22 +101,22 @@ def build_T_net(input_shape = (2048, 3), normalize = True, name = ""):
     features = Input(input_shape, name = "input_features")
     
     conv10 = Conv1D(filters = 64, kernel_size = (1), padding = 'valid', strides = (1), activation = "relu", name = name + "_conv10")(features)
-    if normalize:conv10 = BatchNormalization(name = name + "_conv10_bn")(conv10)
+    if normalize:conv10 = MyBN(name = name + "_conv10_bn")(conv10)
         
     conv11 = Conv1D(filters = 128, kernel_size = (1), padding = 'valid', strides = (1), activation = "relu", name = name + "_conv11")(conv10)
-    if normalize:conv11 = BatchNormalization(name = name + "_conv11_bn")(conv11)
+    if normalize:conv11 = MyBN(name = name + "_conv11_bn")(conv11)
         
     conv12 = Conv1D(filters = 1024, kernel_size = (1), padding = 'valid', strides = (1), activation = "relu", name = name + "_conv12")(conv11)
-    if normalize:conv12 = BatchNormalization(name = name + "_conv12_bn")(conv12)
+    if normalize:conv12 = MyBN(name = name + "_conv12_bn")(conv12)
     
     global_features = MaxPooling1D(pool_size = input_shape[0], strides = None, padding = "valid")(conv12)
     global_features = Flatten()(global_features)
     
     dense0 = Dense(512, activation = "relu", name = name + "_dense0")(global_features)
-    if normalize:dense0 = BatchNormalization(name = name + "_dense0_bn")(dense0)
+    if normalize:dense0 = MyBN(name = name + "_dense0_bn")(dense0)
         
     dense1 = Dense(256, activation = "relu", name = name + "_dense1")(dense0)
-    if normalize:dense1 = BatchNormalization(name = name + "_dense1_bn")(dense1)
+    if normalize:dense1 = MyBN(name = name + "_dense1_bn")(dense1)
     
     transform = TransformLayer(input_shape[1])(dense1)
     transform = Reshape((input_shape[1], input_shape[1]), name = name + "_reshape")(transform)
